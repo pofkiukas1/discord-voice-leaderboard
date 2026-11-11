@@ -1,0 +1,79 @@
+name: Test and deploy Discord bot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-voice-leaderboard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test (Node.js 24)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Check syntax
+        run: |
+          node --check src/index.js
+          node --check src/store.js
+          node --check src/leaderboard.js
+      - name: Run unit tests
+        run: npm test
+
+  deploy:
+    name: Deploy to Oracle VM
+    needs: test
+    # Deploy manually via "Run workflow", or enable push-based deployments
+    # by creating the repo variable ORACLE_AUTO_DEPLOY=true.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && vars.ORACLE_AUTO_DEPLOY == 'true') }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+      ORACLE_KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+    steps:
+      - name: Validate deploy secrets
+        run: |
+          test -n "$ORACLE_HOST" || { echo "Missing ORACLE_HOST secret"; exit 1; }
+          test -n "$ORACLE_SSH_KEY" || { echo "Missing ORACLE_SSH_KEY secret"; exit 1; }
+          test -n "$ORACLE_KNOWN_HOSTS" || { echo "Missing ORACLE_KNOWN_HOSTS secret"; exit 1; }
+
+      - name: Configure SSH with verified server host key
+        shell: bash
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/oracle_key"
+          chmod 600 "$HOME/.ssh/oracle_key"
+          printf '%s\n' "$ORACLE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Update bot on Oracle and restart service
+        shell: bash
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -i "$HOME/.ssh/oracle_key" "ubuntu@$ORACLE_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          cd /home/ubuntu/discord-voice-leaderboard
+          git pull --ff-only origin main
+          npm install --omit=dev --no-audit --no-fund
+          npm test
+          sudo -n systemctl restart discord-voice-leaderboard
+          sudo -n systemctl is-active --quiet discord-voice-leaderboard
+          echo "Oracle deployment finished successfully."
+          REMOTE
