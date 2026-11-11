@@ -11,7 +11,9 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 - Vibrant native Discord embeds with podium colors, rankings, progress bars, and top-three Discord avatars (no rendered image)
 - Admin-only `/checknow` command to immediately refresh the leaderboard
 - Announces the **last human to leave voice across the entire server** as the loser, editing one persistent loser message
-- Optional administrator-controlled cleanup: delete only newly posted messages in the selected text channel, preserving all pre-existing history
+- Automatically cleans the fixed leaderboard text channel at every scheduled refresh and `/checknow`, preserving the leaderboard, loser and latest overtake messages
+- Posts Lithuanian overtake announcements with a shuffled pool of 598 playful roasts, reducing repeated phrases
+- Keeps the first selected leaderboard channel locked, including channels already saved in SQLite
 - Starts automatically with `systemd` and restarts after failures
 - Does not require privileged Discord intents or joining voice channels
 
@@ -20,8 +22,8 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 Use the Discord Developer Portal application (application ID `738733401460441150`).
 
 1. Open **Bot** and copy or reset its **bot token**. Never post it or commit it.
-2. In **Installation**, enable **Guild Install**, add `bot` scope and the permissions **View Channels**, **Send Messages**, **Embed Links**, and **Read Message History**. For optional channel cleanup, also grant **Manage Messages** in that channel. Use the generated install link to invite it to your server.
-3. In Discord user settings, enable **Developer Mode** and right-click your server to copy its Server ID. The leaderboard channel is now selected with a Discord command.
+2. In **Installation**, enable **Guild Install**, add `bot` scope and the permissions **View Channels**, **Send Messages**, **Embed Links**, and **Read Message History**. Grant **Manage Messages** in the leaderboard channel for automatic cleanup. Use the generated install link to invite it to your server.
+3. In Discord user settings, enable **Developer Mode** and right-click your server to copy its Server ID. The leaderboard channel is selected once with a Discord command, then locked to prevent changes. Previously saved channel selections stay in place.
 4. In the Developer Portal **Installation** settings, include the `applications.commands` scope along with `bot` (re-invite the bot if needed). No privileged Discord intents are required.
 
 ## Oracle VM setup (Ubuntu)
@@ -50,7 +52,7 @@ nano .env
 chmod 600 .env
 ```
 
-Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. `/checknow` immediately updates the same message; it does not post a new one. The last person to leave any server voice channel when everyone else is already gone becomes the **loser**; the bot posts or updates a separate, single last-loser message. Voice switches, voice disconnections while other people remain, and bot restarts do not declare a loser. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
+Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. Once a channel has been saved, selecting a different channel is rejected. `/checknow` immediately updates the same message; it does not post a new one. The last person to leave any server voice channel when everyone else is already gone becomes the **loser**; the bot posts or updates a separate, single last-loser message. Voice switches, voice disconnections while other people remain, and bot restarts do not declare a loser. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
 
 Test it interactively with `npm start`. When it logs in, run `/leaderboard-channel` in Discord and choose a text channel from the picker; the bot will post immediately and update every 20 minutes. Stop with Ctrl+C, then enable the background service:
 
@@ -64,13 +66,19 @@ sudo journalctl -u discord-voice-leaderboard -f
 
 The bundled service assumes the Ubuntu username `ubuntu` and the working directory `/home/ubuntu/discord-voice-leaderboard`. Adjust both if your Linux username is different.
 
-## Optional cleanup of new messages
+## Automatic cleanup in the locked leaderboard channel
 
-Run `/leaderboard-channel channel:#your-channel cleanup:true` as a member with **Manage Server** permission to enable automatic deletion of **new messages posted after the command is used** in that selected text channel. Earlier messages (including pinned posts) stay untouched, even after a bot restart. The leaderboard and latest loser posts remain, and they will be updated rather than reposted.
+The bot uses the previously saved `/leaderboard-channel` destination; you **do not need to reselect it or run a new command**. The first selection becomes permanent. If you have not selected a channel, use `/leaderboard-channel channel:#your-channel` once.
 
-Give the bot **Manage Messages**, **View Channel**, and **Read Message History** permissions in that channel. No other server channels are affected. Users' subsequent messages in the selected channel will be deleted, so use a dedicated leaderboard channel.
+At each scheduled 20-minute leaderboard update and whenever an administrator invokes `/checknow`, the bot deletes **all other messages in that one channel**, including existing history. It keeps the current leaderboard, last-to-leave loser announcement, and latest overtake message. Older overtake announcements are removed on the next cleanup. **Deleted messages cannot be restored**. The bot needs **Manage Messages** permissions, including for older posts; other channels are never affected.
 
-Disable it with `/leaderboard-channel channel:#your-channel cleanup:false`. Selecting a different text channel defaults cleanup to off unless explicitly enabled. Both the setting and start time are retained in SQLite.
+## Lithuanian ranking-overtake announcements
+
+When a member's cumulative voice time moves strictly above another member's total, the bot posts in the leaderboard channel:
+
+`📈 @someone aplenkė @someone! Susiimk, ...!`
+
+The phrase comes from a shuffled pool of 598 variants. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot establishes a new ranking baseline at startup to prevent announcing historical overtakes. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
 
 ## Notes
 
