@@ -4,6 +4,7 @@ import { isLastToLeave, isProtectedMessage, loserEmbed } from './last-leaver.js'
 import { resolve } from 'node:path';
 import { VoiceStore } from './store.js';
 import { leaderboardEmbeds, refreshBucket } from './leaderboard.js';
+import { snapshotTotals, findOvertakes, nextRoast, overtakeMessage } from './overtakes.js';
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const guildId = process.env.DISCORD_GUILD_ID;
@@ -28,14 +29,74 @@ let publishing = false;
 let stopped = false;
 let lastBucket = refreshBucket();
 let lastLoserPublish = Promise.resolve();
+let rankingSnapshot = null;
+let maintenanceQueue = Promise.resolve();
 
 // The selected channel is persisted in SQLite; the environment variable is an optional default.
 function configuredChannelId() {
   return store.setting('leaderboard_channel_id') || initialChannelId;
 }
 
-function cleanupEnabled() {
-  return store.setting('cleanup_enabled') === 'true';
+// Keep the existing channel selected in SQLite, and never change it afterwards.
+async function announceOvertake(overtakerId, passedId) {
+  const channelId = configuredChannelId();
+  if (!channelId) return;
+  try {
+    const channel = await client.channels.fetch(channelId);
+    const post = await channel.send({
+      content: overtakeMessage(overtakerId, passedId, nextRoast(store)),
+      allowedMentions: { users: [overtakerId, passedId] },
+    });
+    store.setSetting('overtake_message_id', post.id);
+    console.log('Announced overtake:', overtakerId, passedId);
+  } catch (error) {
+    console.error('Overtake announcement failed:', error);
+  }
+}
+
+async function checkOvertakesAndClean() {
+  const channelId = configuredChannelId();
+  if (!connected || stopped || !channelId) return;
+  const totals = snapshotTotals(store.totals(), Date.now());
+  if (rankingSnapshot !== null) {
+    for (const event of findOvertakes(rankingSnapshot, totals, 5)) {
+      await announceOvertake(event.overtakerId, event.passedId);
+    }
+  }
+  rankingSnapshot = totals;
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel?.type !== ChannelType.GuildText) return;
+    let before;
+    let count = 0;
+    while (!stopped && configuredChannelId() === channelId) {
+      const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+      if (!page.size) break;
+      before = page.last().id;
+      const keep = new Set([
+        store.setting('leaderboard_message_id'),
+        store.setting('loser_message_id'),
+        store.setting('overtake_message_id'),
+      ].filter(Boolean));
+      for (const message of page.values()) {
+        if (keep.has(message.id)) continue;
+        // Don't race the bot while it posts a new leaderboard/announcement.
+        if (message.author?.id === client.user?.id &&
+            Date.now() - message.createdTimestamp < 15_000) continue;
+        try { await message.delete(); count++; }
+        catch (error) { if (error.code !== 10008) console.warn('Cleanup failed:', error.message); }
+      }
+      if (page.size < 100) break;
+    }
+    if (count) console.log('Removed ' + count + ' extraneous messages from channel ' + channelId);
+  } catch (error) {
+    console.error('Leaderboard channel cleanup failed:', error);
+  }
+}
+function queueMaintenance() {
+  maintenanceQueue = maintenanceQueue.catch((error) => console.error(error))
+    .then(() => checkOvertakesAndClean());
+  return maintenanceQueue;
 }
 
 // This remains a separate bot message; subsequent losers edit the same post.
@@ -74,17 +135,6 @@ async function publishLastLoser() {
 function queueLoserAnnouncement() {
   lastLoserPublish = lastLoserPublish.catch(() => false).then(() => publishLastLoser());
   return lastLoserPublish;
-}
-
-// Cleanup applies ONLY to new messages created after an administrator enables it.
-// No history scans, bulk deletes, or removal of existing/pinned messages.
-function shouldDeleteNewMessage(message) {
-  if (!cleanupEnabled() || message.channelId !== configuredChannelId() || message.guildId !== guildId)
-    return false;
-  if (message.author?.id === client.user?.id) return false;
-  const enabledAt = Number(store.setting('cleanup_started_at')) || Number.MAX_SAFE_INTEGER;
-  return message.createdTimestamp >= enabledAt &&
-    !isProtectedMessage(message.id, store.setting('leaderboard_message_id'), store.setting('loser_message_id'));
 }
 
 function voiceMembers(guild) {
@@ -164,11 +214,7 @@ async function registerCommands(guild) {
       .setName('channel')
       .setDescription('Text channel where the leaderboard will appear')
       .addChannelTypes(ChannelType.GuildText)
-      .setRequired(true))
-    .addBooleanOption((option) => option
-      .setName('cleanup')
-      .setDescription('Delete only NEW messages after enabling; preserve existing history')
-      .setRequired(false));
+      .setRequired(true));
   const checkNow = new SlashCommandBuilder()
     .setName('checknow')
     .setDescription('Refresh the voice activity leaderboard immediately')
@@ -204,6 +250,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const updated = await publish();
       if (updated) {
         await queueLoserAnnouncement();
+        await queueMaintenance();
       }
       await interaction.editReply(updated
         ? '✅ Leaderboard updated just now in <#' + configuredChannelId() + '>.'
@@ -215,64 +262,38 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({ content: 'Please select a text channel on this server.', flags: MessageFlags.Ephemeral });
       return;
     }
-    const oldChannelId = configuredChannelId();
-    const changing = channel.id !== oldChannelId;
-    const option = interaction.options.getBoolean('cleanup');
-    const clean = option === null ? (!changing && cleanupEnabled()) : option;
-    const me = interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
-    const perms = channel.permissionsFor(me);
-    if (!perms?.has([
-      PermissionFlagsBits.ViewChannel,
-      PermissionFlagsBits.SendMessages,
-      PermissionFlagsBits.EmbedLinks,
-      PermissionFlagsBits.ReadMessageHistory,
-    ])) {
+    const saved = configuredChannelId();
+    if (saved && saved !== channel.id) {
       await interaction.reply({
-        content: 'I need View Channel, Send Messages, Embed Links and Read Message History permissions in that channel.',
+        content: 'The leaderboard is permanently locked to <#' + saved + '>. It cannot be changed.',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
-    if (clean && !perms.has(PermissionFlagsBits.ManageMessages)) {
+    const me = interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+    if (!channel.permissionsFor(me)?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.ReadMessageHistory,
+      PermissionFlagsBits.ManageMessages,
+    ])) {
       await interaction.reply({
-        content: 'For cleanup, grant me Manage Messages in that channel. Only new messages after enabling will be deleted.',
+        content: 'I need View Channel, Send Messages, Embed Links, Read Message History and Manage Messages in that channel.',
         flags: MessageFlags.Ephemeral,
       });
       return;
     }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const oldMessageId = store.setting('leaderboard_message_id');
-    const oldLoserMessageId = store.setting('loser_message_id');
-    const changed = changing;
-    if (changed) {
-      store.setSetting('leaderboard_message_id', '');
-      store.setSetting('loser_message_id', '');
-    }
-    store.setSetting('leaderboard_channel_id', channel.id);
-    const wasCleaning = cleanupEnabled();
-    if (clean && (!wasCleaning || changed)) store.setSetting('cleanup_started_at', Date.now());
-    store.setSetting('cleanup_enabled', clean ? 'true' : 'false');
+    if (!saved) store.setSetting('leaderboard_channel_id', channel.id);
     const posted = await publish();
     if (posted) {
       await queueLoserAnnouncement();
-    }
-    if (posted && changed && oldChannelId) {
-      try {
-        const previous = await client.channels.fetch(oldChannelId);
-        if (previous?.isTextBased()) {
-          for (const id of [oldMessageId, oldLoserMessageId].filter(Boolean)) {
-            try { await (await previous.messages.fetch(id)).delete(); }
-            catch (error) { console.warn('Could not remove an old board message:', error.message); }
-          }
-        }
-      } catch (error) {
-        console.warn('Unable to access old leaderboard channel:', error.message);
-      }
+      await queueMaintenance();
     }
     await interaction.editReply(posted
-      ? 'Leaderboard channel set to <#' + channel.id + '>. Updates every 20 minutes. ' +
-        (clean ? 'Cleanup enabled: only newly posted messages will be deleted. Existing history is preserved.' : 'Cleanup disabled.')
-      : 'Channel selection saved, but posting failed. Check the bot logs.');
+      ? 'Leaderboard fixed to <#' + channel.id + '>. Unrelated messages are cleared at every check.'
+      : 'Channel saved, but posting failed. Check the bot logs.');
   } catch (error) {
     console.error('Selecting leaderboard channel failed:', error);
     try {
@@ -292,6 +313,8 @@ async function syncFromGuild(guild) {
   console.log(`Tracking ${guild.voiceStates.cache.filter((s) => s.channelId).size} live voice connections`);
   await publish();
   await queueLoserAnnouncement();
+  rankingSnapshot = snapshotTotals(store.totals());
+  if (configuredChannelId()) void queueMaintenance();
 }
 
 client.once(Events.ClientReady, async () => {
@@ -335,13 +358,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
   }
 });
 
-// No Message Content intent is needed: only author, channel, and message IDs are used.
-client.on(Events.MessageCreate, (message) => {
-  if (!shouldDeleteNewMessage(message)) return;
-  void message.delete().catch((error) => console.warn('Could not delete new message:', error.message));
-
-});
-
 client.on(Events.ShardResume, async () => {
   const guild = client.guilds.cache.get(guildId);
   if (guild) await syncFromGuild(guild);
@@ -371,7 +387,8 @@ const timer = setInterval(async () => {
     const bucket = refreshBucket(now);
     if (bucket !== lastBucket) {
       lastBucket = bucket;
-      await publish();
+      const posted = await publish();
+      if (posted) await queueMaintenance();
     }
   } catch (error) {
     console.error('Maintenance task failed:', error);
