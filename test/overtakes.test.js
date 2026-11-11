@@ -48,7 +48,7 @@ test('roast pool persists without repetitions through a cycle', () => {
 test('overtake messages use display names without tagging anyone', () => {
   assert.equal(
     overtakeMessage('ANDROMEDA', 'starking', 'Dek pragare, riebalų pabaisa.'),
-    '📈 **ANDROMEDA** aplenkė **starking**!\\nDek pragare, riebalų pabaisa.',
+    '📈 **ANDROMEDA** aplenkė **starking**!\nDek pragare, riebalų pabaisa.',
   );
   const message = overtakeMessage('@ANDROMEDA', '<@123456>', 'Pataikyta.');
   assert.ok(!message.includes('@'));
