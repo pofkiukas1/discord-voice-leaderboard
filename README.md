@@ -12,7 +12,7 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 - Admin-only `/checknow` command to immediately refresh the leaderboard
 - Announces the **last human to leave voice across the entire server** as the loser, editing one persistent loser message
 - Automatically cleans the fixed leaderboard text channel at every scheduled refresh and `/checknow`, preserving the leaderboard, loser and latest overtake messages
-- Posts Lithuanian overtake announcements with a shuffled pool of 598 playful roasts, reducing repeated phrases
+- Posts Lithuanian overtake announcements with a shuffled pool of harsh, profane roasts, minimizing repeats
 - Keeps the first selected leaderboard channel locked, including channels already saved in SQLite
 - Starts automatically with `systemd` and restarts after failures
 - Does not require privileged Discord intents or joining voice channels
@@ -76,9 +76,9 @@ At each scheduled 20-minute leaderboard update and whenever an administrator inv
 
 When a member's cumulative voice time moves strictly above another member's total, the bot posts in the leaderboard channel:
 
-`📈 @someone aplenkė @someone! Susiimk, ...!`
+`📈 @someone aplenkė @someone!` followed by a complete, randomly chosen Lithuanian insult.
 
-The phrase comes from a shuffled pool of 598 variants. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot establishes a new ranking baseline at startup to prevent announcing historical overtakes. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
+The phrase comes from a shuffled pool of 2020 variants, including strong profanity; the message does not use the fixed phrase 'Susiimk'. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot establishes a new ranking baseline at startup to prevent announcing historical overtakes. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
 
 ## Notes
 

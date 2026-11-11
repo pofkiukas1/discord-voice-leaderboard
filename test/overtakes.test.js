@@ -4,7 +4,8 @@ import { ROASTS, snapshotTotals, findOvertakes, nextRoast, overtakeMessage } fro
 import { VoiceStore } from '../src/store.js';
 
 test('there are at least 500 different Lithuanian roasts', () => {
-  assert.ok(ROASTS.length >= 500);
+  assert.ok(ROASTS.length >= 1000);
+  assert.ok(ROASTS.every((r) => !r.includes('Susiimk') && !r.includes('Eik nachui')));
   assert.equal(new Set(ROASTS).size, ROASTS.length);
 });
 
@@ -44,5 +45,5 @@ test('roast pool persists without repetitions through a cycle', () => {
 });
 
 test('overtake message mentions exactly the two players', () => {
-  assert.match(overtakeMessage('1','2','grybe'), /^📈 <@1> aplenkė <@2>! Susiimk, grybe!$/);
+  assert.equal(overtakeMessage('1','2','Dek pragare, riebalų pabaisa.'), '📈 <@1> aplenkė <@2>!\nDek pragare, riebalų pabaisa.');
 });
