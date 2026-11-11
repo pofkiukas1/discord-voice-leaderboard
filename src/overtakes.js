@@ -221,20 +221,38 @@ export function snapshotTotals(rows, now = Date.now()) {
     String(row.user_id),
     Math.max(0, Number(row.total_ms) + (row.started_at_ms == null
       ? 0 : Math.max(0, now - Number(row.started_at_ms)))),
-  ]).filter(([, value]) => value > 0));
+  ]));
 }
 
-// A must have strictly less recorded time than B before, and strictly more after.
-// Comparisons are based on actual milliseconds rather than tie-breaking IDs.
+// Use exactly the same ranking order as leaderboardRows in leaderboard.js,
+// including the deterministic user-ID tie break.
+// An ID with zero total is unranked; it can later climb past an existing member.
+export function rankedIds(totals) {
+  return Object.entries(totals)
+    .filter(([, value]) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([userId]) => userId);
+}
+
+// Compare actual leaderboard positions, not only strict inequalities between
+// recorded milliseconds. This also catches overtakes caused by tied totals.
+// Only announce for users known in the previous snapshot: a brand-new member
+// with no recorded prior ranking must not trigger historical comparisons.
 export function findOvertakes(previous, current, maxAnnouncements = 5) {
-  if (!previous) return [];
-  const ids = Object.keys(current).filter((id) => Object.hasOwn(previous, id));
+  if (!previous || maxAnnouncements <= 0) return [];
+  const oldPositions = new Map(rankedIds(previous).map((id, i) => [id, i]));
+  const newPositions = new Map(rankedIds(current).map((id, i) => [id, i]));
+  const ids = [...newPositions.keys()].filter((id) => Object.hasOwn(previous, id));
   const events = [];
   for (const overtakerId of ids) {
+    const beforePosition = oldPositions.get(overtakerId) ?? Number.POSITIVE_INFINITY;
+    const afterPosition = newPositions.get(overtakerId);
     for (const passedId of ids) {
       if (overtakerId === passedId) continue;
-      if (previous[overtakerId] < previous[passedId] &&
-          current[overtakerId] > current[passedId]) {
+      const passedBefore = oldPositions.get(passedId);
+      if (passedBefore === undefined) continue;
+      const passedAfter = newPositions.get(passedId);
+      if (beforePosition > passedBefore && afterPosition < passedAfter) {
         events.push({
           overtakerId,
           passedId,
@@ -243,7 +261,9 @@ export function findOvertakes(previous, current, maxAnnouncements = 5) {
       }
     }
   }
-  return events.sort((a, b) => b.marginMs - a.marginMs).slice(0, maxAnnouncements);
+  return events.sort((a, b) => b.marginMs - a.marginMs ||
+    a.overtakerId.localeCompare(b.overtakerId) || a.passedId.localeCompare(b.passedId))
+    .slice(0, maxAnnouncements);
 }
 
 function shuffleIndices(rng = Math.random) {

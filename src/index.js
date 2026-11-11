@@ -30,6 +30,20 @@ let stopped = false;
 let lastBucket = refreshBucket();
 let lastLoserPublish = Promise.resolve();
 let rankingSnapshot = null;
+// Reload the previous checked ranking after a bot restart. Earlier versions
+// did not persist this, so the first check after upgrading sets the baseline.
+try {
+  const saved = store.setting('overtake_ranking_snapshot_v2');
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+        Object.entries(parsed).every(([id, ms]) => id.length > 0 && Number.isFinite(ms) && ms >= 0)) {
+      rankingSnapshot = parsed;
+    }
+  }
+} catch (error) {
+  console.warn('Stored overtake ranking could not be loaded:', error.message);
+}
 let maintenanceQueue = Promise.resolve();
 
 // The selected channel is persisted in SQLite; the environment variable is an optional default.
@@ -66,6 +80,7 @@ async function checkOvertakesAndClean() {
     }
   }
   rankingSnapshot = totals;
+  store.setSetting('overtake_ranking_snapshot_v2', JSON.stringify(totals));
   let deleted = 0;
   let failed = 0;
   try {
@@ -370,7 +385,8 @@ async function syncFromGuild(guild) {
   console.log(`Tracking ${guild.voiceStates.cache.filter((s) => s.channelId).size} live voice connections`);
   await publish();
   await queueLoserAnnouncement();
-  rankingSnapshot = snapshotTotals(store.totals());
+  // Do not reset the previous ranking during startup or a gateway reconnect:
+  // otherwise /checknow could miss an overtake since the last scheduled check.
   if (configuredChannelId()) void queueMaintenance();
 }
 

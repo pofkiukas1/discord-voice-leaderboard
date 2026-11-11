@@ -13,7 +13,8 @@ test('detects a genuine overtake but not ties or unchanged ordering', () => {
   const before = { '111': 10_000, '222': 20_000, '333': 40_000 };
   const after = { '111': 21_000, '222': 20_000, '333': 40_000 };
   assert.deepEqual(findOvertakes(before, after).map(({overtakerId,passedId})=>[overtakerId,passedId]), [['111','222']]);
-  assert.deepEqual(findOvertakes(before, { '111': 20_000, '222': 20_000, '333': 40_000 }), []);
+  assert.deepEqual(findOvertakes(before, { '111': 20_000, '222': 20_000, '333': 40_000 }),
+    [{ overtakerId: '111', passedId: '222', marginMs: 0 }]);
   assert.deepEqual(findOvertakes(null, after), []);
   assert.deepEqual(findOvertakes(before, { '111': 25_000, '222': 20_000, '333': 40_000, '444': 100_000 }), [{ overtakerId: '111', passedId: '222', marginMs: 5_000 }]);
 });
@@ -46,4 +47,25 @@ test('roast pool persists without repetitions through a cycle', () => {
 
 test('overtake message mentions exactly the two players', () => {
   assert.equal(overtakeMessage('1','2','Dek pragare, riebalų pabaisa.'), '📈 <@1> aplenkė <@2>!\nDek pragare, riebalų pabaisa.');
+});
+
+test('detects overtakes based on the order actually displayed in the leaderboard', () => {
+  const lastShown = { 'andromeda': 60 * 60_000, 'starking': 80 * 60_000 };
+  const now = { 'andromeda': 83 * 60_000, 'starking': 80 * 60_000 };
+  assert.deepEqual(findOvertakes(lastShown, now), [{
+    overtakerId: 'andromeda', passedId: 'starking', marginMs: 3 * 60_000,
+  }]);
+});
+
+test('zero-total known members can overtake without false brand-new-member alerts', () => {
+  assert.deepEqual(findOvertakes({ a: 0, b: 20_000 }, { a: 25_000, b: 20_000 }), [
+    { overtakerId: 'a', passedId: 'b', marginMs: 5_000 },
+  ]);
+  assert.deepEqual(findOvertakes({ b: 20_000 }, { a: 25_000, b: 20_000 }), []);
+});
+
+test('ties use the same user-ID ordering as the visible leaderboard', () => {
+  assert.deepEqual(findOvertakes({ '111': 20_000, '222': 20_000 }, { '111': 20_000, '222': 20_000 }), []);
+  assert.deepEqual(findOvertakes({ '111': 20_000, '222': 30_000 }, { '111': 30_000, '222': 30_000 }),
+    [{ overtakerId: '111', passedId: '222', marginMs: 0 }]);
 });

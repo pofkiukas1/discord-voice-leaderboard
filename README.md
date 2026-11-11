@@ -78,7 +78,7 @@ When a member's cumulative voice time moves strictly above another member's tota
 
 `📈 @someone aplenkė @someone!` followed by a complete, randomly chosen Lithuanian insult.
 
-The phrase comes from a shuffled pool of 2020 variants, including strong profanity; the message does not use the fixed phrase 'Susiimk'. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot establishes a new ranking baseline at startup to prevent announcing historical overtakes. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
+The phrase comes from a shuffled pool of 2020 variants, including strong profanity; the message does not use the fixed phrase 'Susiimk'. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot saves a ranking snapshot in SQLite after each check and restores it across restarts. It compares the previous displayed positions with the new positions, including tie-breaking, and does not announce unknown historical changes from before this snapshot feature was installed. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
 
 ## Notes
 
