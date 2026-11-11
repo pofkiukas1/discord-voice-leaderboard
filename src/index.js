@@ -114,7 +114,8 @@ async function registerCommands(guild) {
     .setName('checknow')
     .setDescription('Refresh the voice activity leaderboard immediately')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
-  await guild.commands.set([command.toJSON(), checkNow.toJSON()]);
+  await guild.commands.create(command.toJSON());
+  await guild.commands.create(checkNow.toJSON());
   console.log('Registered /leaderboard-channel and /checknow commands');
 }
 
