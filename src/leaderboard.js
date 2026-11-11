@@ -20,6 +20,70 @@ export function leaderboardRows(rows, now = Date.now(), limit = LEADERBOARD_SIZE
     .slice(0, limit);
 }
 
+export function activityBar(milliseconds, leaderMilliseconds, width = 10) {
+  const proportion = leaderMilliseconds > 0 ? milliseconds / leaderMilliseconds : 0;
+  const filled = milliseconds > 0 ? Math.max(1, Math.min(width, Math.round(proportion * width))) : 0;
+  return '▰'.repeat(filled) + '▱'.repeat(width - filled);
+}
+
+export function leaderboardEmbeds(rows, now = Date.now(), userProfiles = {}, serverIconUrl = null) {
+  const ranked = leaderboardRows(rows, now);
+  const active = rows.filter((row) => row.started_at_ms != null).length;
+  const leaderMs = ranked[0]?.milliseconds || 0;
+  const embeds = [{
+    title: '🎙️  VOICE ACTIVITY  ·  LEADERBOARD',
+    description: 'Your server’s all-time voice rankings. Stay connected and climb the board.',
+    color: 0x5865F2,
+    fields: [
+      { name: '🎧 In voice now', value: String(active), inline: true },
+      { name: '🏆 Ranked members', value: String(rows.filter((r) => Number(r.total_ms) > 0 || r.started_at_ms != null).length), inline: true },
+      { name: '⏱️ Next refresh', value: 'Every 20 min', inline: true },
+    ],
+    ...(serverIconUrl ? { thumbnail: { url: serverIconUrl } } : {}),
+    footer: { text: 'Use /checknow for an instant refresh • All-time stats' },
+    timestamp: new Date(now).toISOString(),
+  }];
+
+  if (ranked.length === 0) {
+    embeds[0].description = 'Nobody has recorded voice activity yet. Join a voice channel to start your climb!';
+    return embeds;
+  }
+
+  const medals = [
+    { medal: '🥇', color: 0xF7C948, label: 'CHAMPION' },
+    { medal: '🥈', color: 0xA8B7C9, label: 'RUNNER-UP' },
+    { medal: '🥉', color: 0xDB9365, label: 'THIRD PLACE' },
+  ];
+
+  for (let i = 0; i < Math.min(3, ranked.length); i++) {
+    const row = ranked[i];
+    const { medal, color, label } = medals[i];
+    const profile = userProfiles[row.userId] || {};
+    const name = (profile.name || `Member #${i + 1}`).slice(0, 80);
+    const percent = leaderMs ? Math.round(row.milliseconds / leaderMs * 100) : 0;
+    embeds.push({
+      color,
+      author: {
+        name: `${medal}  #${i + 1}  ${name}  ·  ${label}`,
+        ...(profile.avatarUrl ? { icon_url: profile.avatarUrl } : {}),
+      },
+      description: `<@${row.userId}>\n**${formatDuration(row.milliseconds)}** in voice\n${activityBar(row.milliseconds, leaderMs, 12)}  **${percent}%**`,
+    });
+  }
+
+  if (ranked.length > 3) {
+    embeds.push({
+      title: '✨  THE REST OF THE TOP 15',
+      color: 0x28B7BA,
+      description: ranked.slice(3).map((row, index) =>
+        `**${String(index + 4).padStart(2, '0')}**  <@${row.userId}>  ·  **${formatDuration(row.milliseconds)}**\n${activityBar(row.milliseconds, leaderMs, 10)}`
+      ).join('\n'),
+    });
+  }
+  return embeds;
+}
+
+// Backwards-compatible helper for anyone importing the earlier one-embed renderer.
 export function leaderboardEmbed(rows, now = Date.now()) {
   const ranked = leaderboardRows(rows, now);
   return {
@@ -27,7 +91,7 @@ export function leaderboardEmbed(rows, now = Date.now()) {
     description: ranked.length
       ? ranked.map((row, i) => `${i + 1}. <@${row.userId}> — **${formatDuration(row.milliseconds)}**`).join('\n')
       : 'Nobody has logged any voice activity yet.',
-    color: 0x5865f2,
+    color: 0x5865F2,
     footer: { text: 'All-time voice activity • Refreshes every 20 minutes' },
     timestamp: new Date(now).toISOString(),
   };
