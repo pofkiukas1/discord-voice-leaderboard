@@ -10,6 +10,8 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 - Updates a single leaderboard message at UTC :00, :20, :40
 - Vibrant native Discord embeds with podium colors, rankings, progress bars, and top-three Discord avatars (no rendered image)
 - Admin-only `/checknow` command to immediately refresh the leaderboard
+- Announces the **last human to leave voice across the entire server** as the loser, editing one persistent loser message
+- Optional administrator-controlled cleanup: keep only the leaderboard and loser posts in the selected text channel
 - Starts automatically with `systemd` and restarts after failures
 - Does not require privileged Discord intents or joining voice channels
 
@@ -18,7 +20,7 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 Use the Discord Developer Portal application (application ID `738733401460441150`).
 
 1. Open **Bot** and copy or reset its **bot token**. Never post it or commit it.
-2. In **Installation**, enable **Guild Install**, add `bot` scope and the permissions **View Channels**, **Send Messages**, **Embed Links**, and **Read Message History**. Use the generated install link to invite it to your server.
+2. In **Installation**, enable **Guild Install**, add `bot` scope and the permissions **View Channels**, **Send Messages**, **Embed Links**, and **Read Message History**. For optional channel cleanup, also grant **Manage Messages** in that channel. Use the generated install link to invite it to your server.
 3. In Discord user settings, enable **Developer Mode** and right-click your server to copy its Server ID. The leaderboard channel is now selected with a Discord command.
 4. In the Developer Portal **Installation** settings, include the `applications.commands` scope along with `bot` (re-invite the bot if needed). No privileged Discord intents are required.
 
@@ -48,7 +50,7 @@ nano .env
 chmod 600 .env
 ```
 
-Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. `/checknow` immediately updates the same message; it does not post a new one. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
+Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. `/checknow` immediately updates the same message; it does not post a new one. The last person to leave any server voice channel when everyone else is already gone becomes the **loser**; the bot posts or updates a separate, single last-loser message. Voice switches, voice disconnections while other people remain, and bot restarts do not declare a loser. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
 
 Test it interactively with `npm start`. When it logs in, run `/leaderboard-channel` in Discord and choose a text channel from the picker; the bot will post immediately and update every 20 minutes. Stop with Ctrl+C, then enable the background service:
 
@@ -61,6 +63,14 @@ sudo journalctl -u discord-voice-leaderboard -f
 ```
 
 The bundled service assumes the Ubuntu username `ubuntu` and the working directory `/home/ubuntu/discord-voice-leaderboard`. Adjust both if your Linux username is different.
+
+## Optional cleanup of the leaderboard text channel
+
+Run `/leaderboard-channel channel:#your-channel cleanup:true` as a member with **Manage Server** permission to turn on cleanup. This permanently deletes **every other message** in that *one selected text channel* (including older messages and pinned posts), retaining only the current leaderboard and latest loser announcement. Messages posted later in that channel are deleted too. **Use a dedicated channel; deletion cannot be undone.**
+
+The bot must have **Manage Messages**, **View Channel**, and **Read Message History** in that text channel. It does not delete messages anywhere else on the server. Discord's API cannot bulk-delete messages older than 14 days, so older messages are deleted individually and cleanup may take longer on busy channels.
+
+To disable deletion, run `/leaderboard-channel channel:#your-channel cleanup:false`. Selecting a *different* text channel defaults cleanup to off unless `cleanup:true` is explicitly supplied. The chosen setting persists in SQLite.
 
 ## Notes
 

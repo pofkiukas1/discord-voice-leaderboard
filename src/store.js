@@ -30,6 +30,7 @@ export class VoiceStore {
     this.addTime = this.db.prepare('UPDATE users SET total_ms = total_ms + ? WHERE user_id = ?');
     this.removeActive = this.db.prepare('DELETE FROM active WHERE user_id = ?');
     this.listActive = this.db.prepare('SELECT user_id, channel_id, started_at_ms FROM active');
+    this.countActive = this.db.prepare('SELECT COUNT(*) AS count FROM active');
     this.listTotals = this.db.prepare('SELECT users.user_id, users.total_ms, active.started_at_ms FROM users LEFT JOIN active ON users.user_id = active.user_id');
     this.getSetting = this.db.prepare('SELECT value FROM settings WHERE key = ?');
     this.putSetting = this.db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
@@ -98,6 +99,7 @@ export class VoiceStore {
     });
   }
 
+  activeCount() { return Number(this.countActive.get().count); }
   totals() { return this.listTotals.all(); }
   setting(key) { return this.getSetting.get(key)?.value ?? null; }
   setSetting(key, value) { this.putSetting.run(key, String(value)); }
