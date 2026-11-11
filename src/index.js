@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { Client, GatewayIntentBits, Events, SlashCommandBuilder, ChannelType, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { resolve } from 'node:path';
 import { VoiceStore } from './store.js';
-import { leaderboardEmbed, refreshBucket } from './leaderboard.js';
+import { leaderboardEmbeds, refreshBucket } from './leaderboard.js';
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const guildId = process.env.DISCORD_GUILD_ID;
@@ -48,8 +48,33 @@ async function publish() {
     if (!channel || !channel.isTextBased() || typeof channel.send !== 'function') {
       throw new Error('Target is not a writable text channel.');
     }
-    const embed = leaderboardEmbed(store.totals());
-    const payload = { embeds: [embed], allowedMentions: { parse: [] } };
+    const allRows = store.totals();
+    const ranked = allRows.map((row) => ({
+      userId: String(row.user_id),
+      totalMs: Number(row.total_ms) +
+        (row.started_at_ms == null ? 0 : Math.max(0, Date.now() - Number(row.started_at_ms))),
+    })).sort((a, b) => b.totalMs - a.totalMs).slice(0, 3);
+
+    const profiles = {};
+    const guild = client.guilds.cache.get(guildId);
+    await Promise.all(ranked.map(async ({ userId }) => {
+      try {
+        const member = await guild?.members.fetch(userId);
+        if (member) {
+          profiles[userId] = {
+            name: member.displayName,
+            avatarUrl: member.displayAvatarURL({ extension: 'png', size: 128 }),
+          };
+        } else {
+          const user = await client.users.fetch(userId);
+          profiles[userId] = { name: user.username, avatarUrl: user.displayAvatarURL({ extension: 'png', size: 128 }) };
+        }
+      } catch (error) {
+        console.warn('Avatar lookup failed for ' + userId + ': ' + error.message);
+      }
+    }));
+    const embeds = leaderboardEmbeds(allRows, Date.now(), profiles, guild?.iconURL({ extension: 'png', size: 128 }));
+    const payload = { embeds, allowedMentions: { parse: [] } };
     const messageId = store.setting('leaderboard_message_id');
     if (messageId) {
       try {
@@ -85,17 +110,41 @@ async function registerCommands(guild) {
       .setDescription('Text channel where the leaderboard will appear')
       .addChannelTypes(ChannelType.GuildText)
       .setRequired(true));
-  await guild.commands.create(command.toJSON());
-  console.log('Registered /leaderboard-channel command');
+  const checkNow = new SlashCommandBuilder()
+    .setName('checknow')
+    .setDescription('Refresh the voice activity leaderboard immediately')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+  await guild.commands.set([command.toJSON(), checkNow.toJSON()]);
+  console.log('Registered /leaderboard-channel and /checknow commands');
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand() ||
-      interaction.commandName !== 'leaderboard-channel' ||
+      !['leaderboard-channel', 'checknow'].includes(interaction.commandName) ||
       interaction.guildId !== guildId) return;
   try {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
       await interaction.reply({ content: 'You need Manage Server permission for this command.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (interaction.commandName === 'checknow') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      if (!configuredChannelId()) {
+        await interaction.editReply('Select a text channel first using /leaderboard-channel.');
+        return;
+      }
+      if (!connected) {
+        await interaction.editReply('Discord connection is still starting. Try again shortly.');
+        return;
+      }
+      if (publishing) {
+        await interaction.editReply('The leaderboard is already being refreshed. Try again shortly.');
+        return;
+      }
+      const updated = await publish();
+      await interaction.editReply(updated
+        ? '✅ Leaderboard updated just now in <#' + configuredChannelId() + '>.'
+        : 'Could not refresh the leaderboard. Check the bot logs.');
       return;
     }
     const channel = interaction.options.getChannel('channel', true);
