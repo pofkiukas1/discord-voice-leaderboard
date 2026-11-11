@@ -28,7 +28,6 @@ let publishing = false;
 let stopped = false;
 let lastBucket = refreshBucket();
 let lastLoserPublish = Promise.resolve();
-let cleanupTask = null;
 
 // The selected channel is persisted in SQLite; the environment variable is an optional default.
 function configuredChannelId() {
@@ -77,58 +76,15 @@ function queueLoserAnnouncement() {
   return lastLoserPublish;
 }
 
-// Cleanup is opt-in and ONLY affects the explicitly selected leaderboard text channel.
-// It retains exactly the leaderboard and last-leaver messages, including across restarts.
-async function cleanSelectedChannel() {
-  const channelId = configuredChannelId();
-  if (!channelId || !cleanupEnabled()) return;
-  const channel = await client.channels.fetch(channelId);
-  if (!channel || channel.type !== ChannelType.GuildText) return;
-  let before;
-  let removed = 0;
-  while (cleanupEnabled() && configuredChannelId() === channelId && !stopped) {
-    const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
-    if (!batch.size) break;
-    before = batch.last().id;
-    const protectedIds = [
-      store.setting('leaderboard_message_id'),
-      store.setting('loser_message_id'),
-    ];
-    const now = Date.now();
-    // During a concurrent post, never delete the bot's just-created message
-    // before its ID has been persisted.
-    const deleteList = [...batch.values()].filter((message) =>
-      !isProtectedMessage(message.id, ...protectedIds) &&
-      !(message.author?.id === client.user?.id && now - message.createdTimestamp < 15_000));
-    const newer = deleteList.filter((message) => message.createdTimestamp > now - 13 * 24 * 3600_000);
-    const older = deleteList.filter((message) => message.createdTimestamp <= now - 13 * 24 * 3600_000);
-    if (newer.length >= 2) {
-      try {
-        const deleted = await channel.bulkDelete(newer.map((m) => m.id), true);
-        removed += deleted.size;
-      } catch (error) {
-        console.warn('Bulk cleanup failed; trying individual deletes:', error.message);
-        for (const message of newer) {
-          try { await message.delete(); removed++; } catch (e) { console.warn('Cleanup failed:', e.message); }
-        }
-      }
-    } else if (newer.length === 1) {
-      try { await newer[0].delete(); removed++; } catch (error) { console.warn('Cleanup failed:', error.message); }
-    }
-    for (const message of older) {
-      try { await message.delete(); removed++; } catch (error) { console.warn('Old message cleanup failed:', error.message); }
-    }
-    if (batch.size < 100) break;
-  }
-  if (removed) console.log('Cleaned ' + removed + ' unrelated messages from ' + channelId);
-}
-function scheduleChannelCleanup() {
-  if (!cleanupEnabled()) return Promise.resolve();
-  if (cleanupTask) return cleanupTask;
-  cleanupTask = cleanSelectedChannel()
-    .catch((error) => console.error('Leaderboard channel cleanup failed:', error))
-    .finally(() => { cleanupTask = null; });
-  return cleanupTask;
+// Cleanup applies ONLY to new messages created after an administrator enables it.
+// No history scans, bulk deletes, or removal of existing/pinned messages.
+function shouldDeleteNewMessage(message) {
+  if (!cleanupEnabled() || message.channelId !== configuredChannelId() || message.guildId !== guildId)
+    return false;
+  if (message.author?.id === client.user?.id) return false;
+  const enabledAt = Number(store.setting('cleanup_started_at')) || Number.MAX_SAFE_INTEGER;
+  return message.createdTimestamp >= enabledAt &&
+    !isProtectedMessage(message.id, store.setting('leaderboard_message_id'), store.setting('loser_message_id'));
 }
 
 function voiceMembers(guild) {
@@ -211,7 +167,7 @@ async function registerCommands(guild) {
       .setRequired(true))
     .addBooleanOption((option) => option
       .setName('cleanup')
-      .setDescription('PERMANENTLY delete all other messages from this text channel')
+      .setDescription('Delete only NEW messages after enabling; preserve existing history')
       .setRequired(false));
   const checkNow = new SlashCommandBuilder()
     .setName('checknow')
@@ -248,7 +204,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const updated = await publish();
       if (updated) {
         await queueLoserAnnouncement();
-        if (cleanupEnabled()) void scheduleChannelCleanup();
       }
       await interaction.editReply(updated
         ? '✅ Leaderboard updated just now in <#' + configuredChannelId() + '>.'
@@ -280,7 +235,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (clean && !perms.has(PermissionFlagsBits.ManageMessages)) {
       await interaction.reply({
-        content: 'For cleanup, grant me Manage Messages in that channel. This will permanently delete other messages there.',
+        content: 'For cleanup, grant me Manage Messages in that channel. Only new messages after enabling will be deleted.',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -294,11 +249,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
       store.setSetting('loser_message_id', '');
     }
     store.setSetting('leaderboard_channel_id', channel.id);
+    const wasCleaning = cleanupEnabled();
+    if (clean && (!wasCleaning || changed)) store.setSetting('cleanup_started_at', Date.now());
     store.setSetting('cleanup_enabled', clean ? 'true' : 'false');
     const posted = await publish();
     if (posted) {
       await queueLoserAnnouncement();
-      if (clean) void scheduleChannelCleanup();
     }
     if (posted && changed && oldChannelId) {
       try {
@@ -315,7 +271,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     await interaction.editReply(posted
       ? 'Leaderboard channel set to <#' + channel.id + '>. Updates every 20 minutes. ' +
-        (clean ? 'Cleanup ENABLED: all other messages in this channel will be permanently deleted.' : 'Cleanup disabled.')
+        (clean ? 'Cleanup enabled: only newly posted messages will be deleted. Existing history is preserved.' : 'Cleanup disabled.')
       : 'Channel selection saved, but posting failed. Check the bot logs.');
   } catch (error) {
     console.error('Selecting leaderboard channel failed:', error);
@@ -336,7 +292,6 @@ async function syncFromGuild(guild) {
   console.log(`Tracking ${guild.voiceStates.cache.filter((s) => s.channelId).size} live voice connections`);
   await publish();
   await queueLoserAnnouncement();
-  if (cleanupEnabled()) void scheduleChannelCleanup();
 }
 
 client.once(Events.ClientReady, async () => {
@@ -376,20 +331,15 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     store.setSetting('last_loser_name', name);
     store.setSetting('last_loser_at', Date.now());
     console.log('Last member to leave voice:', name, id);
-    void queueLoserAnnouncement().then(() => {
-      if (cleanupEnabled()) void scheduleChannelCleanup();
-    });
+    void queueLoserAnnouncement();
   }
 });
 
 // No Message Content intent is needed: only author, channel, and message IDs are used.
 client.on(Events.MessageCreate, (message) => {
-  if (message.guildId !== guildId ||
-      message.channelId !== configuredChannelId() ||
-      !cleanupEnabled() ||
-      message.author?.id === client.user?.id ||
-      isProtectedMessage(message.id, store.setting('leaderboard_message_id'), store.setting('loser_message_id'))) return;
-  void message.delete().catch((error) => console.warn('Could not clean new message:', error.message));
+  if (!shouldDeleteNewMessage(message)) return;
+  void message.delete().catch((error) => console.warn('Could not delete new message:', error.message));
+
 });
 
 client.on(Events.ShardResume, async () => {
@@ -422,7 +372,6 @@ const timer = setInterval(async () => {
     if (bucket !== lastBucket) {
       lastBucket = bucket;
       await publish();
-      if (cleanupEnabled()) void scheduleChannelCleanup();
     }
   } catch (error) {
     console.error('Maintenance task failed:', error);
