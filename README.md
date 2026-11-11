@@ -17,8 +17,8 @@ Use the Discord Developer Portal application (application ID `738733401460441150
 
 1. Open **Bot** and copy or reset its **bot token**. Never post it or commit it.
 2. In **Installation**, enable **Guild Install**, add `bot` scope and the permissions **View Channels**, **Send Messages**, **Embed Links**, and **Read Message History**. Use the generated install link to invite it to your server.
-3. In Discord user settings, enable **Developer Mode**. Right-click your server and the target leaderboard text channel to copy their IDs.
-4. No privileged Discord intents are required.
+3. In Discord user settings, enable **Developer Mode** and right-click your server to copy its Server ID. The leaderboard channel is now selected with a Discord command.
+4. In the Developer Portal **Installation** settings, include the `applications.commands` scope along with `bot` (re-invite the bot if needed). No privileged Discord intents are required.
 
 ## Oracle VM setup (Ubuntu)
 
@@ -46,9 +46,9 @@ nano .env
 chmod 600 .env
 ```
 
-Set `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID`, and `DISCORD_CHANNEL_ID`. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
+Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
 
-Test it interactively with `npm start`. Stop with Ctrl+C once it logs in and creates the leaderboard, then enable the background service:
+Test it interactively with `npm start`. When it logs in, run `/leaderboard-channel` in Discord and choose a text channel from the picker; the bot will post immediately and update every 20 minutes. Stop with Ctrl+C, then enable the background service:
 
 ```bash
 sudo cp deploy/discord-voice-leaderboard.service /etc/systemd/system/
