@@ -304,6 +304,16 @@ export function nextRoast(store, rng = Math.random) {
   return ROASTS[index];
 }
 
-export function overtakeMessage(overtakerId, passedId, roast) {
-  return `📈 <@${overtakerId}> aplenkė <@${passedId}>!\n${roast}`;
+// Display only names, with no Discord @mentions or notifications.
+export function safeOvertakeName(name) {
+  return String(name || 'Nežinomas dalyvis')
+    .replace(/<@!?\d+>/g, '')
+    .replace(/@/g, '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/([*_~`|\\])/g, '\\$1')
+    .trim().slice(0, 80) || 'Nežinomas dalyvis';
+}
+
+export function overtakeMessage(overtakerName, passedName, roast) {
+  return `📈 **${safeOvertakeName(overtakerName)}** aplenkė **${safeOvertakeName(passedName)}**!\n${roast}`;
 }

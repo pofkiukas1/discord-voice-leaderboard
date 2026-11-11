@@ -76,7 +76,7 @@ At each scheduled 20-minute leaderboard update and whenever an administrator inv
 
 When a member's cumulative voice time moves strictly above another member's total, the bot posts in the leaderboard channel:
 
-`📈 @someone aplenkė @someone!` followed by a complete, randomly chosen Lithuanian insult.
+`📈 ANDROMEDA aplenkė starking!` followed by a randomly chosen Lithuanian insult. Display names are used instead of Discord @mentions, so no notifications are sent.
 
 The phrase comes from a shuffled pool of 2020 variants, including strong profanity; the message does not use the fixed phrase 'Susiimk'. The remaining pool is stored in SQLite so repeats are minimized even after restarts. The bot saves a ranking snapshot in SQLite after each check and restores it across restarts. It compares the previous displayed positions with the new positions, including tie-breaking, and does not announce unknown historical changes from before this snapshot feature was installed. Overtakes are evaluated during checks (the normal 20-minute refresh and `/checknow`).
 

@@ -52,14 +52,31 @@ function configuredChannelId() {
 }
 
 // Keep the existing channel selected in SQLite, and never change it afterwards.
+async function resolveDisplayName(userId) {
+  try {
+    const guild = client.guilds.cache.get(guildId);
+    const member = await guild?.members.fetch(userId);
+    if (member) return member.displayName;
+    const user = await client.users.fetch(userId);
+    return user.globalName || user.username;
+  } catch (error) {
+    console.warn('Could not fetch display name for ' + userId + ': ' + error.message);
+    return 'Dalyvis ' + userId;
+  }
+}
+
 async function announceOvertake(overtakerId, passedId) {
   const channelId = configuredChannelId();
   if (!channelId) return;
   try {
     const channel = await client.channels.fetch(channelId);
+    const [overtakerName, passedName] = await Promise.all([
+      resolveDisplayName(overtakerId),
+      resolveDisplayName(passedId),
+    ]);
     const post = await channel.send({
-      content: overtakeMessage(overtakerId, passedId, nextRoast(store)),
-      allowedMentions: { users: [overtakerId, passedId] },
+      content: overtakeMessage(overtakerName, passedName, nextRoast(store)),
+      allowedMentions: { parse: [] },
     });
     store.setSetting('overtake_message_id', post.id);
     console.log('Announced overtake:', overtakerId, passedId);

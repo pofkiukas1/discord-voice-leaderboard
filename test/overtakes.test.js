@@ -45,8 +45,13 @@ test('roast pool persists without repetitions through a cycle', () => {
   }
 });
 
-test('overtake message mentions exactly the two players', () => {
-  assert.equal(overtakeMessage('1','2','Dek pragare, riebalų pabaisa.'), '📈 <@1> aplenkė <@2>!\nDek pragare, riebalų pabaisa.');
+test('overtake messages use display names without tagging anyone', () => {
+  assert.equal(
+    overtakeMessage('ANDROMEDA', 'starking', 'Dek pragare, riebalų pabaisa.'),
+    '📈 **ANDROMEDA** aplenkė **starking**!\\nDek pragare, riebalų pabaisa.',
+  );
+  const message = overtakeMessage('@ANDROMEDA', '<@123456>', 'Pataikyta.');
+  assert.ok(!message.includes('@'));
 });
 
 test('detects overtakes based on the order actually displayed in the leaderboard', () => {
