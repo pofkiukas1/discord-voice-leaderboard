@@ -56,7 +56,9 @@ async function announceOvertake(overtakerId, passedId) {
 
 async function checkOvertakesAndClean() {
   const channelId = configuredChannelId();
-  if (!connected || stopped || !channelId) return;
+  if (!connected || stopped || !channelId) {
+    return { deleted: 0, failed: 0, error: 'Bot is not connected or no leaderboard channel is configured.' };
+  }
   const totals = snapshotTotals(store.totals(), Date.now());
   if (rankingSnapshot !== null) {
     for (const event of findOvertakes(rankingSnapshot, totals, 5)) {
@@ -64,11 +66,28 @@ async function checkOvertakesAndClean() {
     }
   }
   rankingSnapshot = totals;
+  let deleted = 0;
+  let failed = 0;
   try {
     const channel = await client.channels.fetch(channelId);
-    if (channel?.type !== ChannelType.GuildText) return;
+    if (!channel || channel.type !== ChannelType.GuildText) {
+      throw new Error('Saved leaderboard channel is not a text channel.');
+    }
+    const me = channel.guild.members.me ?? await channel.guild.members.fetchMe();
+    const permissions = channel.permissionsFor(me);
+    const needed = [
+      [PermissionFlagsBits.ViewChannel, 'View Channel'],
+      [PermissionFlagsBits.ReadMessageHistory, 'Read Message History'],
+      [PermissionFlagsBits.ManageMessages, 'Manage Messages'],
+    ];
+    const missing = needed.filter(([flag]) => !permissions?.has(flag)).map(([, name]) => name);
+    if (missing.length) {
+      const error = 'Missing bot permissions in leaderboard channel: ' + missing.join(', ');
+      console.error('Leaderboard channel cleanup failed:', error);
+      return { deleted, failed, error };
+    }
+
     let before;
-    let count = 0;
     while (!stopped && configuredChannelId() === channelId) {
       const page = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
       if (!page.size) break;
@@ -78,19 +97,51 @@ async function checkOvertakesAndClean() {
         store.setting('loser_message_id'),
         store.setting('overtake_message_id'),
       ].filter(Boolean));
-      for (const message of page.values()) {
-        if (keep.has(message.id)) continue;
-        // Don't race the bot while it posts a new leaderboard/announcement.
-        if (message.author?.id === client.user?.id &&
-            Date.now() - message.createdTimestamp < 15_000) continue;
-        try { await message.delete(); count++; }
-        catch (error) { if (error.code !== 10008) console.warn('Cleanup failed:', error.message); }
+      const candidates = [...page.values()].filter((message) => {
+        if (keep.has(message.id)) return false;
+        // Don't race the bot while it posts a new leaderboard or announcement.
+        return message.author?.id !== client.user?.id ||
+          Date.now() - message.createdTimestamp >= 15_000;
+      });
+      const bulkCutoff = Date.now() - 13 * 24 * 60 * 60 * 1000;
+      const recent = candidates.filter((message) => message.createdTimestamp > bulkCutoff);
+      const older = candidates.filter((message) => message.createdTimestamp <= bulkCutoff);
+
+      if (recent.length > 1) {
+        try {
+          const result = await channel.bulkDelete(recent.map((message) => message.id), true);
+          deleted += result.size;
+        } catch (error) {
+          console.warn('Bulk cleanup failed; retrying messages individually:', error.message);
+          older.push(...recent);
+        }
+      } else {
+        older.push(...recent);
+      }
+      for (const message of older) {
+        if (stopped || configuredChannelId() !== channelId) break;
+        try {
+          await message.delete();
+          deleted++;
+        } catch (error) {
+          if (error.code === 10008) continue;
+          failed++;
+          console.warn('Leaderboard channel message deletion failed:', error.message);
+          // Don't hammer the API for each individual message if authorization is missing.
+          if (error.code === 50013 || error.code === 50001) {
+            const reason = 'Discord denied message deletion (' + error.code + '). Grant the bot Manage Messages and Read Message History.';
+            console.error('Leaderboard channel cleanup failed:', reason);
+            return { deleted, failed, error: reason };
+          }
+        }
       }
       if (page.size < 100) break;
     }
-    if (count) console.log('Removed ' + count + ' extraneous messages from channel ' + channelId);
+    console.log('Leaderboard cleanup finished:', { deleted, failed, channelId });
+    return { deleted, failed, error: null };
   } catch (error) {
     console.error('Leaderboard channel cleanup failed:', error);
+    return { deleted, failed, error: error.message || String(error) };
   }
 }
 function queueMaintenance() {
@@ -248,13 +299,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       const updated = await publish();
+      let cleanup = null;
       if (updated) {
         await queueLoserAnnouncement();
-        await queueMaintenance();
+        cleanup = await queueMaintenance();
       }
-      await interaction.editReply(updated
-        ? '✅ Leaderboard updated just now in <#' + configuredChannelId() + '>.'
-        : 'Could not refresh the leaderboard. Check the bot logs.');
+      const status = !updated
+        ? 'Could not refresh the leaderboard. Check the bot logs.'
+        : cleanup?.error
+          ? 'Leaderboard updated, but cleanup failed: ' + cleanup.error
+          : 'Leaderboard updated in <#' + configuredChannelId() + '>. Deleted ' +
+            (cleanup?.deleted ?? 0) + ' unrelated messages.' +
+            (cleanup?.failed ? ' Failed to delete ' + cleanup.failed + ' messages; check bot logs.' : '');
+      await interaction.editReply(status);
       return;
     }
     const channel = interaction.options.getChannel('channel', true);
