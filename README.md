@@ -69,3 +69,52 @@ The bundled service assumes the Ubuntu username `ubuntu` and the working directo
 - Oracle Always Free is subject to capacity and idle-reclamation policies; not guaranteed 100% uptime.
 
 Run local tests: `npm test`.
+
+## GitHub Actions (CI/CD)
+
+The [test/deploy workflow](.github/workflows/ci-deploy.yml) runs syntax checks and unit tests on pushes to `main` and pull requests targeting `main`.
+
+**Deploying is optional**. To set it up, create a dedicated SSH deploy key rather than uploading your personal Oracle private key.
+
+### On the Oracle VM
+
+Generate a deploy key and add it to the Ubuntu user's `authorized_keys`. You can use:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/github_actions_deploy -N "" -C "github-actions-deploy"
+cat ~/.ssh/github_actions_deploy.pub >> ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+```
+
+Transfer the **private** key securely into a GitHub Actions secret, then delete the server-side private copy when the connection works. Do not put the key in the repository or paste it into chat. A separate narrowly scoped deployment user is preferable for production; these instructions use `ubuntu` for simplicity.
+
+Enable a narrow passwordless sudo rule for the bot service, **not** unrestricted passwordless sudo:
+
+```bash
+sudo visudo -f /etc/sudoers.d/discord-bot-deploy
+```
+
+Add this line (adjust the username if required):
+
+```text
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl restart discord-voice-leaderboard, /usr/bin/systemctl is-active --quiet discord-voice-leaderboard
+```
+
+The bundled `systemd` service must already exist and be running before deploying through Actions.
+
+### In GitHub
+
+Go to **Settings → Secrets and variables → Actions → Secrets**, and create:
+
+- `ORACLE_HOST`: Oracle VM public IPv4 address.
+- `ORACLE_SSH_KEY`: complete contents of the **dedicated deploy private key**.
+- `ORACLE_KNOWN_HOSTS`: verified SSH host public key entry for the Oracle VM. Obtain the fingerprint from a trusted session or Oracle console and independently verify before trusting; do not blindly trust the output of `ssh-keyscan`.
+
+Your Discord bot token stays in `/home/ubuntu/discord-voice-leaderboard/.env` on Oracle, not in GitHub Actions.
+
+To deploy manually, go to **Actions → Test and deploy Discord bot → Run workflow**.
+
+To deploy automatically after tests pass on a push to `main`, set repository variable `ORACLE_AUTO_DEPLOY` to `true` under **Settings → Secrets and variables → Actions → Variables**.
+
+**Note:** GitHub Actions runs are not a replacement for a continuously running Oracle VM. GitHub Actions only handles testing and deployment; the bot stays online through `systemd` on Oracle.
