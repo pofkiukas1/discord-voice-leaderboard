@@ -1,14 +1,14 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Events, SlashCommandBuilder, ChannelType, PermissionFlagsBits, MessageFlags } from 'discord.js';
 import { resolve } from 'node:path';
 import { VoiceStore } from './store.js';
 import { leaderboardEmbed, refreshBucket } from './leaderboard.js';
 
 const token = process.env.DISCORD_BOT_TOKEN;
 const guildId = process.env.DISCORD_GUILD_ID;
-const channelId = process.env.DISCORD_CHANNEL_ID;
-if (!token || !guildId || !channelId || [token, guildId, channelId].some((x) => x.startsWith('replace_with_'))) {
-  console.error('Set DISCORD_BOT_TOKEN, DISCORD_GUILD_ID and DISCORD_CHANNEL_ID in .env');
+const initialChannelId = process.env.DISCORD_CHANNEL_ID?.trim() || null;
+if (!token || !guildId || [token, guildId].some((x) => x.startsWith('replace_with_'))) {
+  console.error('Set DISCORD_BOT_TOKEN and DISCORD_GUILD_ID in .env');
   process.exit(1);
 }
 
@@ -27,6 +27,11 @@ let publishing = false;
 let stopped = false;
 let lastBucket = refreshBucket();
 
+// The selected channel is persisted in SQLite; the environment variable is an optional default.
+function configuredChannelId() {
+  return store.setting('leaderboard_channel_id') || initialChannelId;
+}
+
 function voiceMembers(guild) {
   return [...guild.voiceStates.cache.values()]
     .filter((state) => state.channelId && state.id !== client.user?.id && state.member?.user?.bot !== true)
@@ -34,7 +39,9 @@ function voiceMembers(guild) {
 }
 
 async function publish() {
-  if (publishing || !connected || stopped) return;
+  if (publishing || !connected || stopped) return false;
+  const channelId = configuredChannelId();
+  if (!channelId) return false;
   publishing = true;
   try {
     const channel = await client.channels.fetch(channelId);
@@ -49,7 +56,7 @@ async function publish() {
         const message = await channel.messages.fetch(messageId);
         await message.edit(payload);
         console.log('Updated leaderboard:', message.id);
-        return;
+        return true;
       } catch (error) {
         if (error.code !== 10008) throw error;
         console.log('Previous leaderboard was deleted; creating a replacement.');
@@ -58,12 +65,90 @@ async function publish() {
     const message = await channel.send(payload);
     store.setSetting('leaderboard_message_id', message.id);
     console.log('Created leaderboard message:', message.id);
+    return true;
   } catch (error) {
     console.error('Leaderboard publish failed:', error);
+    return false;
   } finally {
     publishing = false;
   }
 }
+
+// Admins choose the destination directly using Discord's built-in text channel picker.
+async function registerCommands(guild) {
+  const command = new SlashCommandBuilder()
+    .setName('leaderboard-channel')
+    .setDescription('Choose the text channel for voice activity rankings')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption((option) => option
+      .setName('channel')
+      .setDescription('Text channel where the leaderboard will appear')
+      .addChannelTypes(ChannelType.GuildText)
+      .setRequired(true));
+  await guild.commands.create(command.toJSON());
+  console.log('Registered /leaderboard-channel command');
+}
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand() ||
+      interaction.commandName !== 'leaderboard-channel' ||
+      interaction.guildId !== guildId) return;
+  try {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+      await interaction.reply({ content: 'You need Manage Server permission for this command.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const channel = interaction.options.getChannel('channel', true);
+    if (channel.type !== ChannelType.GuildText || channel.guildId !== guildId) {
+      await interaction.reply({ content: 'Please select a text channel on this server.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const me = interaction.guild.members.me ?? await interaction.guild.members.fetchMe();
+    const perms = channel.permissionsFor(me);
+    if (!perms?.has([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessages,
+      PermissionFlagsBits.EmbedLinks,
+      PermissionFlagsBits.ReadMessageHistory,
+    ])) {
+      await interaction.reply({
+        content: 'I need View Channel, Send Messages, Embed Links and Read Message History permissions in that channel.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const oldChannelId = configuredChannelId();
+    const oldMessageId = store.setting('leaderboard_message_id');
+    const changed = channel.id !== oldChannelId;
+    if (changed) store.setSetting('leaderboard_message_id', '');
+    store.setSetting('leaderboard_channel_id', channel.id);
+    const posted = await publish();
+    if (posted && changed && oldChannelId && oldMessageId) {
+      try {
+        const previous = await client.channels.fetch(oldChannelId);
+        if (previous?.isTextBased()) {
+          const message = await previous.messages.fetch(oldMessageId);
+          await message.delete();
+        }
+      } catch (error) {
+        console.warn('Unable to delete previous leaderboard message:', error.message);
+      }
+    }
+    await interaction.editReply(posted
+      ? 'Leaderboard channel set to <#' + channel.id + '>. It will update every 20 minutes.'
+      : 'Channel selection saved, but posting failed. Check the bot logs.');
+  } catch (error) {
+    console.error('Selecting leaderboard channel failed:', error);
+    try {
+      const errorReply = { content: 'Unable to set the leaderboard channel. Check bot logs.' };
+      if (interaction.deferred || interaction.replied) await interaction.editReply(errorReply);
+      else await interaction.reply({ ...errorReply, flags: MessageFlags.Ephemeral });
+    } catch (replyError) {
+      console.error('Unable to send command error reply:', replyError);
+    }
+  }
+});
 
 async function syncFromGuild(guild) {
   if (guild.id !== guildId) return;
@@ -83,6 +168,12 @@ client.once(Events.ClientReady, async () => {
     return;
   }
   await syncFromGuild(guild);
+  try {
+    await registerCommands(guild);
+    if (!configuredChannelId()) console.log('No channel selected yet. Use /leaderboard-channel in Discord.');
+  } catch (error) {
+    console.error('Could not register /leaderboard-channel:', error);
+  }
 });
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
