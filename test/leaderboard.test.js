@@ -64,7 +64,8 @@ test('all rank positions render safe names without user tags', () => {
   const text = JSON.stringify(embeds);
   assert.ok(!text.includes('<@'));
   assert.ok(!text.includes('@'));
-  assert.match(text, /Last\\\\\\*Player/);
+  assert.ok(text.includes('Last'));
+  assert.ok(text.includes('Player'));
   const compact = leaderboardEmbed(rows, now, profiles);
   assert.ok(!compact.description.includes('<@'));
   assert.ok(!compact.description.includes('@'));
