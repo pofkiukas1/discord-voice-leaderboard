@@ -33,11 +33,15 @@ test('vibrant embeds include podium avatars and rankings without image files', (
   ];
   const embeds = leaderboardEmbeds(rows, now, {
     '111': { name: 'Top Player', avatarUrl: 'https://cdn.discordapp.com/avatars/111/example.png' },
+    '222': { name: 'Second Player' },
+    '333': { name: 'Third Player' },
+    '444': { name: 'Fourth Player' },
   });
   assert.equal(embeds.length, 5);
   assert.match(embeds[1].author.name, /Top Player/);
   assert.match(embeds[1].author.icon_url, /cdn.discordapp.com/);
-  assert.match(embeds[4].description, /444/);
+  assert.match(embeds[4].description, /Fourth Player/);
+  assert.ok(embeds.every((embed) => !JSON.stringify(embed).includes('<@')));
   assert.equal(embeds[0].fields.length, 3);
   assert.equal(activityBar(100, 100, 5), '▰▰▰▰▰');
   assert.equal(activityBar(0, 100, 5), '▱▱▱▱▱');
@@ -47,4 +51,21 @@ test('empty ranked embeds show join instruction', () => {
   const embeds = leaderboardEmbeds([], now);
   assert.equal(embeds.length, 1);
   assert.match(embeds[0].description, /Join a voice channel/);
+});
+
+test('all rank positions render safe names without user tags', () => {
+  const rows = Array.from({ length: 15 }, (_, i) => ({
+    user_id: String(1000 + i), total_ms: 60_000 * (20 - i), started_at_ms: null,
+  }));
+  const profiles = Object.fromEntries(rows.map((r, i) => [r.user_id, {
+    name: i === 14 ? '@Last*Player' : 'Person ' + (i + 1),
+  }]));
+  const embeds = leaderboardEmbeds(rows, now, profiles);
+  const text = JSON.stringify(embeds);
+  assert.ok(!text.includes('<@'));
+  assert.ok(!text.includes('@'));
+  assert.match(text, /Last\\\\\\*Player/);
+  const compact = leaderboardEmbed(rows, now, profiles);
+  assert.ok(!compact.description.includes('<@'));
+  assert.ok(!compact.description.includes('@'));
 });

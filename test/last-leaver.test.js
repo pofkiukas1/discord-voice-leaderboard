@@ -11,10 +11,12 @@ test('only the final server-wide voice departure is a loser', () => {
   assert.equal(isLastToLeave('vc-a', null, 0, 0), false);
 });
 
-test('the loser announcement includes a displayed name and user reference', () => {
+test('the loser announcement includes a plain displayed name without a mention', () => {
   const embed = loserEmbed('12345', 'Some_One', Date.UTC(2026, 10, 11));
   assert.match(embed.description, /Some\\_One/);
-  assert.match(embed.description, /<@12345>/);
+  assert.ok(!embed.description.includes('<@'));
+  assert.ok(!embed.description.includes('@'));
+  assert.match(loserEmbed('12345', '@Friend').description, /Friend/);
   assert.match(embed.title, /LOSER/);
 });
 

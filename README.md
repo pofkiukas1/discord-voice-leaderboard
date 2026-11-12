@@ -8,7 +8,7 @@ A self-hosted Discord bot that tracks time in **any voice channel** and edits on
 - Counts muted and deafened members
 - Uses SQLite, with checkpoints every minute, so totals survive process and VM restarts
 - Updates a single leaderboard message at UTC :00, :20, :40
-- Vibrant native Discord embeds with podium colors, rankings, progress bars, and top-three Discord avatars (no rendered image)
+- Vibrant native Discord embeds with podium colors, rankings, progress bars, and top-three Discord avatars (no rendered image); names are shown as plain text without @mentions
 - Admin-only `/checknow` command to immediately refresh the leaderboard
 - Announces the **last human to leave voice across the entire server** as the loser, editing one persistent loser message
 - Automatically cleans the fixed leaderboard text channel at every scheduled refresh and `/checknow`, preserving the leaderboard, loser and latest overtake messages
@@ -52,7 +52,7 @@ nano .env
 chmod 600 .env
 ```
 
-Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. Once a channel has been saved, selecting a different channel is rejected. `/checknow` immediately updates the same message; it does not post a new one. The last person to leave any server voice channel when everyone else is already gone becomes the **loser**; the bot posts or updates a separate, single last-loser message. Voice switches, voice disconnections while other people remain, and bot restarts do not declare a loser. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
+Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. `DISCORD_CHANNEL_ID` is optional; you can select the text channel from Discord using `/leaderboard-channel #channel`. Only members with **Manage Server** permission can use this command or `/checknow`. Once a channel has been saved, selecting a different channel is rejected. `/checknow` immediately updates the same message; it does not post a new one. The last person to leave any server voice channel when everyone else is already gone becomes the **loser**; the bot posts or updates a separate, single last-loser message using the member's display name, without pinging them. Voice switches, voice disconnections while other people remain, and bot restarts do not declare a loser. The choice is saved in SQLite and survives restarts. The token must remain on the VM, **never in GitHub**. The sample `.gitignore` excludes `.env` and `data/`.
 
 Test it interactively with `npm start`. When it logs in, run `/leaderboard-channel` in Discord and choose a text channel from the picker; the bot will post immediately and update every 20 minutes. Stop with Ctrl+C, then enable the background service:
 

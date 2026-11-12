@@ -1,3 +1,5 @@
+import { safeOvertakeName } from './overtakes.js';
+
 export const INTERVAL_MS = 20 * 60_000;
 export const LEADERBOARD_SIZE = 15;
 
@@ -59,7 +61,7 @@ export function leaderboardEmbeds(rows, now = Date.now(), userProfiles = {}, ser
     const row = ranked[i];
     const { medal, color, label } = medals[i];
     const profile = userProfiles[row.userId] || {};
-    const name = (profile.name || `Member #${i + 1}`).slice(0, 80);
+    const name = safeOvertakeName(profile.name || `Member #${i + 1}`);
     const percent = leaderMs ? Math.round(row.milliseconds / leaderMs * 100) : 0;
     embeds.push({
       color,
@@ -67,7 +69,7 @@ export function leaderboardEmbeds(rows, now = Date.now(), userProfiles = {}, ser
         name: `${medal}  #${i + 1}  ${name}  ·  ${label}`,
         ...(profile.avatarUrl ? { icon_url: profile.avatarUrl } : {}),
       },
-      description: `<@${row.userId}>\n**${formatDuration(row.milliseconds)}** in voice\n${activityBar(row.milliseconds, leaderMs, 12)}  **${percent}%**`,
+      description: `**${formatDuration(row.milliseconds)}** in voice\n${activityBar(row.milliseconds, leaderMs, 12)}  **${percent}%**`,
     });
   }
 
@@ -76,7 +78,7 @@ export function leaderboardEmbeds(rows, now = Date.now(), userProfiles = {}, ser
       title: '✨  THE REST OF THE TOP 15',
       color: 0x28B7BA,
       description: ranked.slice(3).map((row, index) =>
-        `**${String(index + 4).padStart(2, '0')}**  <@${row.userId}>  ·  **${formatDuration(row.milliseconds)}**\n${activityBar(row.milliseconds, leaderMs, 10)}`
+        `**${String(index + 4).padStart(2, '0')}**  **${safeOvertakeName(userProfiles[row.userId]?.name || `Member #${index + 4}`)}**  ·  **${formatDuration(row.milliseconds)}**\n${activityBar(row.milliseconds, leaderMs, 10)}`
       ).join('\n'),
     });
   }
@@ -84,12 +86,12 @@ export function leaderboardEmbeds(rows, now = Date.now(), userProfiles = {}, ser
 }
 
 // Backwards-compatible helper for anyone importing the earlier one-embed renderer.
-export function leaderboardEmbed(rows, now = Date.now()) {
+export function leaderboardEmbed(rows, now = Date.now(), userProfiles = {}) {
   const ranked = leaderboardRows(rows, now);
   return {
     title: '🏆 Voice Activity Leaderboard',
     description: ranked.length
-      ? ranked.map((row, i) => `${i + 1}. <@${row.userId}> — **${formatDuration(row.milliseconds)}**`).join('\n')
+      ? ranked.map((row, i) => `${i + 1}. ${safeOvertakeName(userProfiles[row.userId]?.name || `Member #${i + 1}`)} — **${formatDuration(row.milliseconds)}**`).join('\n')
       : 'Nobody has logged any voice activity yet.',
     color: 0x5865F2,
     footer: { text: 'All-time voice activity • Refreshes every 20 minutes' },

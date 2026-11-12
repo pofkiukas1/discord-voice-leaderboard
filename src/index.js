@@ -3,7 +3,7 @@ import { Client, GatewayIntentBits, Events, SlashCommandBuilder, ChannelType, Pe
 import { isLastToLeave, isProtectedMessage, loserEmbed } from './last-leaver.js';
 import { resolve } from 'node:path';
 import { VoiceStore } from './store.js';
-import { leaderboardEmbeds, refreshBucket } from './leaderboard.js';
+import { leaderboardEmbeds, leaderboardRows, refreshBucket } from './leaderboard.js';
 import { snapshotTotals, findOvertakes, nextRoast, overtakeMessage } from './overtakes.js';
 
 const token = process.env.DISCORD_BOT_TOKEN;
@@ -237,17 +237,17 @@ async function publish() {
       throw new Error('Target is not a writable text channel.');
     }
     const allRows = store.totals();
-    const ranked = allRows.map((row) => ({
-      userId: String(row.user_id),
-      totalMs: Number(row.total_ms) +
-        (row.started_at_ms == null ? 0 : Math.max(0, Date.now() - Number(row.started_at_ms))),
-    })).sort((a, b) => b.totalMs - a.totalMs).slice(0, 3);
-
+    const ranked = leaderboardRows(allRows, Date.now());
     const profiles = {};
     const guild = client.guilds.cache.get(guildId);
+    // Names are needed for everyone in the Top 15; avatars remain for the podium.
     await Promise.all(ranked.map(async ({ userId }) => {
       try {
-        const member = await guild?.members.fetch(userId);
+        let member = guild?.members.cache.get(userId);
+        if (!member && guild) {
+          try { member = await guild.members.fetch(userId); }
+          catch { /* Member may have left the server; try the user profile. */ }
+        }
         if (member) {
           profiles[userId] = {
             name: member.displayName,
@@ -255,10 +255,13 @@ async function publish() {
           };
         } else {
           const user = await client.users.fetch(userId);
-          profiles[userId] = { name: user.username, avatarUrl: user.displayAvatarURL({ extension: 'png', size: 128 }) };
+          profiles[userId] = {
+            name: user.globalName || user.username,
+            avatarUrl: user.displayAvatarURL({ extension: 'png', size: 128 }),
+          };
         }
       } catch (error) {
-        console.warn('Avatar lookup failed for ' + userId + ': ' + error.message);
+        console.warn('Profile lookup failed for ' + userId + ': ' + error.message);
       }
     }));
     const embeds = leaderboardEmbeds(allRows, Date.now(), profiles, guild?.iconURL({ extension: 'png', size: 128 }));
